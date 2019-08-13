@@ -3,6 +3,7 @@ package cache
 import (
 	"fmt"
 	"reflect"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -142,16 +143,29 @@ func (g *Group) Put(data interface{}) (*manifest, error) {
 	return nm, nil
 }
 
-func (m *manifest) Dump() interface{} {
+func (m *manifest) Dump() (interface{}, chan bool) {
 	m.rwmu.RLock()
 	defer m.rwmu.RUnlock()
+	ack := make(chan bool)
+
 	if m.block.next == nil {
-		return (*(*interface{})(unsafe.Pointer(&m.body[m.block.start])))
+		go throwAck(ack)
+		return (*(*interface{})(unsafe.Pointer(&m.body[m.block.start]))), ack
 	} else {
 		a := make([]byte, 0, m.len)
 		for p := m.block; p.next != nil; p = p.next {
 			a = append(a, m.body[p.start:p.end]...)
 		}
-		return (*(*interface{})(unsafe.Pointer(&a[0])))
+		go keepAlive(a, ack) // In case of GC.
+		return (*(*interface{})(unsafe.Pointer(&a[0]))), ack
 	}
+}
+
+func keepAlive(a []byte, ack chan bool) {
+	<-ack
+	runtime.KeepAlive(a)
+}
+
+func throwAck(ack chan bool) {
+	<-ack
 }

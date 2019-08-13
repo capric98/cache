@@ -24,7 +24,11 @@ func (g *Group) Reorder() error {
 	}
 	// Add all data back.
 	for i := 0; i < len(g.list); i++ {
-		if m, err := newg.Put(g.list[i].Dump()); err != nil {
+		iface, ack := g.list[i].Dump()
+		defer func() {
+			ack <- true
+		}()
+		if m, err := newg.Put(iface); err != nil {
 			return err
 		} else {
 			nblock := *(m.block)
