@@ -1,17 +1,18 @@
 package cache
 
-import "sync"
+import (
+	"sync"
+)
 
 func (g *Group) Reorder() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	for i := 0; i < len(g.list); i++ {
-		g.list[i].rwmu.Lock()
-		defer g.list[i].rwmu.Unlock()
-	}
+
+	tmpPool := make([]byte, g.size)
+	// Copy old pool to tmpPool in order.
 
 	newg := &Group{
-		pool:     g.pool,
+		pool:     tmpPool,
 		size:     g.size,
 		freesize: g.size,
 		block: &indicator{
@@ -20,24 +21,28 @@ func (g *Group) Reorder() error {
 			next:  nil,
 		},
 		mu:   sync.Mutex{},
-		list: g.list,
+		list: make([]*manifest, 0, len(g.list)+64),
 	}
-	// Add all data back.
+
+	// Dump all data.
 	for i := 0; i < len(g.list); i++ {
 		iface, ack := g.list[i].Dump()
-		defer func() {
-			ack <- true
-		}()
-		if m, err := newg.Put(iface); err != nil {
+		if _, err := newg.Put(iface); err != nil {
 			return err
-		} else {
-			nblock := *(m.block)
-			newg.list[i].block = &nblock
 		}
+		ack <- true
 	}
-	g = newg
-	// Oh....
-	// Should not change group address because we return the address
-	// outside the pack, so just copy new list&block data back.
+	// Copy back.
+	for i := 0; i < len(g.list); i++ {
+		g.list[i].rwmu.Lock()
+		defer g.list[i].rwmu.Unlock()
+		// Lock all RWMutex.
+	}
+	_ = copy(g.pool, tmpPool)
+	g.block = newg.block
+	for i := 0; i < len(g.list); i++ {
+		g.list[i] = newg.list[i]
+	}
+
 	return nil
 }

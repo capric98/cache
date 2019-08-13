@@ -125,41 +125,49 @@ func (g *Group) Put(data interface{}) (*manifest, error) {
 		Cap:  int(len),
 	}
 
+	//printblock(g.block)
 	p := nm.block
 	for len != 0 {
 		cblk := g.block
+		//fmt.Println("Place to:", cblk.start, "-", cblk.end)
+		// copy body
 		n := copy(g.pool[cblk.start:cblk.end], *(*[]byte)(unsafe.Pointer(&fakeslice)))
 		p.start = cblk.start
 		if int64(n) == len {
+			// all data copied
 			p.end = cblk.start + int64(n)
 			p.next = nil
 			g.block.start = p.end
 		} else {
+			// block too small, copy another
 			p.end = cblk.end
 			g.block = g.block.next
 			p.next = &indicator{}
 		}
 		len -= int64(n)
 	}
-	copy(g.pool, *(*[]byte)(unsafe.Pointer(&fakeslice)))
+
 	g.list = append(g.list, nm)
+	//printblock(g.block)
 	return nm, nil
 }
 
 func (m *manifest) Dump() (interface{}, chan bool) {
 	m.rwmu.RLock()
-	defer m.rwmu.RUnlock()
 	ack := make(chan bool)
 
 	if m.block.next == nil {
-		go throwAck(ack)
+		go throwAck(ack, &m.rwmu)
+		// The memory of m->Obj should be protect until finish using its
+		// resource, so we pass sync.RWMutex to throwAck func.
 		return (*(*interface{})(unsafe.Pointer(&m.body[m.block.start]))), ack
 	} else {
 		a := make([]byte, 0, m.len)
 		for p := m.block; p.next != nil; p = p.next {
 			a = append(a, m.body[p.start:p.end]...)
 		}
-		go keepAlive(a, ack) // In case of GC.
+		go keepAlive(a, ack) // Now the memory of m->Obj has a copy in slice a,
+		m.rwmu.RUnlock()     // so just keep it alive until finish using it and release RWMutex immediately.
 		return (*(*interface{})(unsafe.Pointer(&a[0]))), ack
 	}
 }
@@ -181,9 +189,11 @@ func (g *Group) Delete(m *manifest) error {
 	for p != nil {
 		g.returnspace(p.start, p.end)
 		p = p.next
+		// Return every part of body.
 	}
-	g.reunion()
-	g.freesize += int64(waitD.len)
+	g.reunion()                                     // Concat neighbour.
+	g.freesize += waitD.len                         // Add freesize marker.
+	g.list = append(g.list[0:i], (g.list[i+1:])...) // Delete manifest.
 	return nil
 }
 
@@ -207,6 +217,7 @@ func (g *Group) returnspace(start, end int64) {
 			return
 		}
 	}
+	//printblock(g.block)
 }
 
 func (g *Group) reunion() {
@@ -215,9 +226,11 @@ func (g *Group) reunion() {
 		if p.end == p.next.start {
 			p.end = p.next.end
 			p.next = p.next.next
+		} else {
+			p = p.next
 		}
-		p = p.next
 	}
+	//printblock(g.block)
 }
 
 func keepAlive(a []byte, ack chan bool) {
@@ -225,6 +238,16 @@ func keepAlive(a []byte, ack chan bool) {
 	runtime.KeepAlive(a)
 }
 
-func throwAck(ack chan bool) {
+func throwAck(ack chan bool, mu *sync.RWMutex) {
 	<-ack
+	mu.RUnlock()
+}
+
+func printblock(b *indicator) {
+	p := b
+	for p != nil {
+		fmt.Printf(" -> %v", *p)
+		p = p.next
+	}
+	fmt.Println("")
 }
