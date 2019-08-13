@@ -108,6 +108,8 @@ func (g *Group) Put(data interface{}) (*manifest, error) {
 		return nil, ErrNoSpareSpace
 	}
 
+	g.freesize -= dlen
+
 	nm := &manifest{
 		body:  g.pool,
 		block: &indicator{},
@@ -159,6 +161,10 @@ func (m *manifest) Dump() (interface{}, chan bool) {
 		go keepAlive(a, ack) // In case of GC.
 		return (*(*interface{})(unsafe.Pointer(&a[0]))), ack
 	}
+}
+
+func Delete() {
+	// How?
 }
 
 func keepAlive(a []byte, ack chan bool) {

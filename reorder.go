@@ -36,5 +36,8 @@ func (g *Group) Reorder() error {
 		}
 	}
 	g = newg
+	// Oh....
+	// Should not change group address because we return the address
+	// outside the pack, so just copy new list&block data back.
 	return nil
 }
