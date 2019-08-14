@@ -21,7 +21,7 @@ func (g *Group) Reorder() error {
 			next:  nil,
 		},
 		mu:   sync.Mutex{},
-		list: make([]*manifest, 0, len(g.list)+64),
+		list: make([]*Manifest, 0, len(g.list)+64),
 	}
 
 	// Dump all data.

@@ -40,10 +40,10 @@ type Group struct {
 	freesize int64
 	block    *indicator
 	mu       sync.Mutex
-	list     []*manifest
+	list     []*Manifest
 }
 
-type manifest struct {
+type Manifest struct {
 	body  []byte
 	block *indicator
 	len   int64
@@ -100,7 +100,7 @@ func (p *Pool) NewGroup() (*Group, error) {
 			next:  nil,
 		},
 		mu:   sync.Mutex{},
-		list: make([]*manifest, 0, p.groupsize/64),
+		list: make([]*Manifest, 0, p.groupsize/64),
 	}
 	return ng, nil
 }
@@ -148,7 +148,7 @@ func (p *Pool) DeleteGroup(g *Group) error {
 	return nil
 }
 
-func (g *Group) Put(data interface{}) (*manifest, error) {
+func (g *Group) Put(data interface{}) (*Manifest, error) {
 	len := int64(unsafe.Sizeof(data))
 	g.mu.Lock()
 	defer g.mu.Unlock()
@@ -158,7 +158,7 @@ func (g *Group) Put(data interface{}) (*manifest, error) {
 
 	g.freesize -= len
 
-	nm := &manifest{
+	nm := &Manifest{
 		body:  g.pool,
 		block: &indicator{},
 		len:   len,
@@ -199,7 +199,7 @@ func (g *Group) Put(data interface{}) (*manifest, error) {
 	return nm, nil
 }
 
-func (g *Group) Delete(m *manifest) error {
+func (g *Group) Delete(m *Manifest) error {
 	i := 0
 	for ; i < len(g.list); i++ {
 		if g.list[i] == m {
@@ -223,7 +223,7 @@ func (g *Group) Delete(m *manifest) error {
 	}
 	g.reunion()                                     // Concat neighbour.
 	g.freesize += waitD.len                         // Add freesize marker.
-	g.list = append(g.list[0:i], (g.list[i+1:])...) // Delete manifest.
+	g.list = append(g.list[0:i], (g.list[i+1:])...) // Delete Manifest.
 
 	g.mu.Unlock()
 	return nil
@@ -265,7 +265,7 @@ func (g *Group) reunion() {
 	//printblock(g.block)
 }
 
-func (m *manifest) Dump() (interface{}, chan bool) {
+func (m *Manifest) Dump() (interface{}, chan bool) {
 	m.rwmu.RLock()
 	ack := make(chan bool)
 
