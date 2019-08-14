@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"runtime"
+	"strconv"
 	"sync"
 	"unsafe"
 )
@@ -17,6 +18,7 @@ var (
 	ErrInvalidGSize = fmt.Errorf("cache: GroupSize must be between 0 and %d", maxGroupSize+1)
 	ErrNoSpareSpace = fmt.Errorf("cache: No spare space!")
 	ErrMNotExist    = fmt.Errorf("cache: Object not found.")
+	ErrGNotExist    = fmt.Errorf("cache: Group not found.")
 )
 
 type indicator struct {
@@ -86,6 +88,8 @@ func (p *Pool) NewGroup() (*Group, error) {
 		return nil, ErrNoSpareSpace
 	}
 
+	p.block = p.block.next
+
 	ng := &Group{
 		pool:     p.pool[p.block.start:p.block.end],
 		size:     p.groupsize,
@@ -99,6 +103,49 @@ func (p *Pool) NewGroup() (*Group, error) {
 		list: make([]*manifest, 0, p.groupsize/64),
 	}
 	return ng, nil
+}
+
+func (p *Pool) DeleteGroup(g *Group) error {
+	gAddress, gerr := strconv.ParseInt(fmt.Sprintf("%v", &(g.pool[0])), 0, 64)
+	pAddress, perr := strconv.ParseInt(fmt.Sprintf("%v", &(p.pool[0])), 0, 64)
+	if gerr != nil || perr != nil {
+		return fmt.Errorf("cache: Address parse error with g:%v,p:%v", gerr, perr)
+	}
+
+	offset := gAddress - pAddress
+	if offset < 0 || offset > p.size-p.groupsize {
+		return ErrGNotExist
+	}
+
+	g.mu.Lock()
+	for i := 0; i < len(g.list); i++ {
+		g.list[i].rwmu.Lock()
+		// Would not return these lock.
+	}
+
+	if p.block == nil {
+		// All groups in Pool have been allocated,
+		// return directly.
+		p.block = &indicator{
+			start: offset,
+			end:   offset + p.groupsize,
+			next:  nil,
+		}
+	} else {
+		// Still have vacancy, find the last vacancy,
+		// and return space after it.
+		pp := p.block
+		for pp.next != nil {
+			pp = pp.next
+		}
+		pp.next = &indicator{
+			start: offset,
+			end:   offset + p.groupsize,
+			next:  nil,
+		}
+	}
+	g = nil // Point to nil and wait to GC.
+	return nil
 }
 
 func (g *Group) Put(data interface{}) (*manifest, error) {
@@ -152,26 +199,6 @@ func (g *Group) Put(data interface{}) (*manifest, error) {
 	return nm, nil
 }
 
-func (m *manifest) Dump() (interface{}, chan bool) {
-	m.rwmu.RLock()
-	ack := make(chan bool)
-
-	if m.block.next == nil {
-		go throwAck(ack, &m.rwmu)
-		// The memory of m->Obj should be protect until finish using its
-		// resource, so we pass sync.RWMutex to throwAck func.
-		return (*(*interface{})(unsafe.Pointer(&m.body[m.block.start]))), ack
-	} else {
-		a := make([]byte, 0, m.len)
-		for p := m.block; p.next != nil; p = p.next {
-			a = append(a, m.body[p.start:p.end]...)
-		}
-		go keepAlive(a, ack) // Now the memory of m->Obj has a copy in slice a,
-		m.rwmu.RUnlock()     // so just keep it alive until finish using it and release RWMutex immediately.
-		return (*(*interface{})(unsafe.Pointer(&a[0]))), ack
-	}
-}
-
 func (g *Group) Delete(m *manifest) error {
 	i := 0
 	for ; i < len(g.list); i++ {
@@ -186,6 +213,9 @@ func (g *Group) Delete(m *manifest) error {
 	waitD.rwmu.Lock()
 	defer waitD.rwmu.Unlock()
 	p := waitD.block
+
+	g.mu.Lock()
+
 	for p != nil {
 		g.returnspace(p.start, p.end)
 		p = p.next
@@ -194,6 +224,8 @@ func (g *Group) Delete(m *manifest) error {
 	g.reunion()                                     // Concat neighbour.
 	g.freesize += waitD.len                         // Add freesize marker.
 	g.list = append(g.list[0:i], (g.list[i+1:])...) // Delete manifest.
+
+	g.mu.Unlock()
 	return nil
 }
 
@@ -233,6 +265,26 @@ func (g *Group) reunion() {
 	//printblock(g.block)
 }
 
+func (m *manifest) Dump() (interface{}, chan bool) {
+	m.rwmu.RLock()
+	ack := make(chan bool)
+
+	if m.block.next == nil {
+		go throwAck(ack, &m.rwmu)
+		// The memory of m->Obj should be protect until finish using its
+		// resource, so we pass sync.RWMutex to throwAck func.
+		return (*(*interface{})(unsafe.Pointer(&m.body[m.block.start]))), ack
+	} else {
+		a := make([]byte, 0, m.len)
+		for p := m.block; p != nil; p = p.next {
+			a = append(a, m.body[p.start:p.end]...)
+		}
+		go keepAlive(a, ack) // Now the memory of m->Obj has a copy in slice a,
+		m.rwmu.RUnlock()     // so just keep it alive until finish using it and release RWMutex immediately.
+		return (*(*interface{})(unsafe.Pointer(&a[0]))), ack
+	}
+}
+
 func keepAlive(a []byte, ack chan bool) {
 	<-ack
 	runtime.KeepAlive(a)
@@ -250,4 +302,4 @@ func printblock(b *indicator) {
 		p = p.next
 	}
 	fmt.Println("")
-}
+} // For debug only.
