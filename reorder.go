@@ -28,6 +28,7 @@ func (g *Group) Reorder() error {
 	for i := 0; i < len(g.list); i++ {
 		iface, ack := g.list[i].Dump()
 		if _, err := newg.Put(iface); err != nil {
+			ack <- true
 			return err
 		}
 		ack <- true
