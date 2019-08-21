@@ -188,8 +188,9 @@ func (g *Group) Put(data interface{}) (*Manifest, error) {
 		} else {
 			// block too small, copy another
 			p.end = cblk.end
-			g.block = g.block.next
 			p.next = &indicator{}
+			g.block = g.block.next
+			p = p.next
 		}
 		len -= int64(n)
 	}
